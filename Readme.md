@@ -57,10 +57,10 @@ Chọn phiên bản, chọn loại key trong ô **Active key**, rồi bấm **Ch
 
 **Khi chọn "Nhập key của bạn":**
 1. Chạy `changepk.exe /ProductKey <key của bạn>` để chuyển phiên bản.
-2. Nếu thành công, **kích hoạt luôn** với Microsoft (tương đương `slmgr /ato`, xem mục *Về kích hoạt*).
+2. Nếu thành công, **kích hoạt luôn** với Microsoft (tương đương `slmgr /ato`).
 3. Nếu Windows chưa kích hoạt được trước khi khởi động lại, log ghi rõ. Windows sẽ tự kích hoạt sau khi khởi động lại (cần Internet).
 
-**Sau khi chuyển thành công** (dù đã kích hoạt hay chưa), script luôn **mở trang Cài đặt > Hệ thống > Kích hoạt** để bạn xem trạng thái hoặc nhập key bản quyền. Cần khởi động lại để hoàn tất; máy có thể tự khởi động lại.
+**Sau khi chuyển thành công** (dù đã kích hoạt hay chưa), script luôn **mở trang Settings > System > Activation** để bạn xem trạng thái hoặc nhập key bản quyền. Cần khởi động lại để hoàn tất; máy có thể tự khởi động lại.
 
 ### 4. Kiểm tra trạng thái kích hoạt
 Nút **Kiểm tra kích hoạt** chỉ đọc thông tin, không thay đổi gì. Kết quả gồm:
@@ -91,30 +91,5 @@ Script chỉ dùng các thành phần **có sẵn trong Windows**:
 | `changepk.exe /ProductKey <key>` | Chuyển sang phiên bản đã chọn, bằng key chọn trong ô Active key |
 | WMI `SoftwareLicensingProduct` (`Get-CimInstance`) | Đọc trạng thái kích hoạt (thay cho `slmgr /dli` và `/xpr`, không cần VBScript) |
 | WMI `SoftwareLicensingProduct.Activate` (`Invoke-CimMethod`) | Kích hoạt trực tuyến khi bạn nhập key bản quyền (tương đương `slmgr /ato`) |
-| `ms-settings:activation` | Mở trang Kích hoạt trong Cài đặt sau khi chuyển |
+| `ms-settings:activation` | Mở trang Settings > System > Activation sau khi chuyển |
 | WPF (PresentationFramework) | Giao diện cửa sổ |
-
-### Về kích hoạt
-
-Script **không dùng KMS**. Việc kích hoạt chỉ xảy ra với **key bản quyền bạn nhập**, theo các bước:
-
-1. **Cài key và chuyển phiên bản:** `changepk.exe /ProductKey <key>`.
-2. **Kích hoạt trực tuyến với Microsoft** (chỉ khi bạn nhập key, và bước 1 trả về mã 0 hoặc 3010):
-   ```powershell
-   Get-CimInstance -ClassName SoftwareLicensingProduct `
-       -Filter "ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL" |
-       Invoke-CimMethod -MethodName Activate
-   ```
-   Nếu chưa kích hoạt được trước khi khởi động lại, Windows sẽ tự kích hoạt key đó sau khi khởi động lại (cần Internet).
-3. **Mở trang Kích hoạt:** `Start-Process 'ms-settings:activation'`, luôn chạy sau khi chuyển thành công, để bạn xem trạng thái hoặc nhập key bản quyền.
-4. **Đọc trạng thái kích hoạt** (nút Kiểm tra kích hoạt, chỉ đọc): `Get-CimInstance -ClassName SoftwareLicensingProduct …`.
-
-Key chung (GVLK hoặc key cài đặt chung) **không bao giờ kích hoạt** Windows. Theo Microsoft, GVLK chỉ kích hoạt được khi máy kết nối với máy chủ KMS hợp lệ trong mạng của tổ chức.
-
-Nếu muốn tự kích hoạt bằng lệnh, dùng công cụ có sẵn của Windows với **key bản quyền của bạn** (chạy PowerShell bằng quyền quản trị):
-
-```powershell
-slmgr.vbs /ipk XXXXX-XXXXX-XXXXX-XXXXX-XXXXX   # cài key bản quyền
-slmgr.vbs /ato                                 # kích hoạt trực tuyến với Microsoft
-slmgr.vbs /dlv                                 # xem chi tiết trạng thái
-```
