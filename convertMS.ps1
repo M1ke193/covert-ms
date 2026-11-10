@@ -116,7 +116,7 @@ LogChecking       = [+] Đang kiểm tra trạng thái kích hoạt...
 LogConverting     = [+] Đang chuyển sang {0}...
 StatusLoading     = Đang tải...
 StatusFailed      = Thất bại
-StatusRestart     = Cần khởi động lại
+StatusRestart     = Cần khởi động lại để hoàn chỉnh
 StatusChecking    = Đang kiểm tra kích hoạt...
 StatusConverting  = Đang chuyển đổi...
 StatusReady       = Sẵn sàng
@@ -766,8 +766,7 @@ $xamlText = @'
         <!-- Header -->
         <Border Grid.Row="0" Background="#161B22" BorderBrush="#30363D" BorderThickness="0,0,0,1" Padding="18,12">
             <DockPanel>
-                <Button x:Name="btnStatus" DockPanel.Dock="Right" Height="32" VerticalAlignment="Center" IsEnabled="False"/>
-                <StackPanel VerticalAlignment="Center">
+                <Button x:Name="btnStatus" DockPanel.Dock="Right" Height="32" VerticalAlignment="Center" IsEnabled="False"/>                <StackPanel VerticalAlignment="Center">
                     <TextBlock FontSize="15" FontWeight="SemiBold">
                         <Run Text="PS&gt; " Foreground="#3FB950"/><Run Text="edition-converter" Foreground="#E6EDF3"/><Run Text=" -Target Win11" Foreground="#8B949E"/>
                     </TextBlock>
@@ -872,8 +871,11 @@ $brushInfo     = New-Brush '#58A6FF'
 $brushCmd      = New-Brush '#D2A8FF'
 $brushMuted    = New-Brush '#8B949E'
 $brushBusy     = New-Brush '#D29922'
+$brushText     = New-Brush '#C9D1D9'
 
-$script:isBusy = $true
+$script:isBusy         = $true
+$script:restartPending = $false   # set after a successful change; the status bar keeps showing it
+$script:quietRefresh   = $false   # true while the silent refresh after a change is running
 
 # Colored log: [+] green, [!] red, [i] blue, "> command" purple, indented tool output muted
 function Get-LogBrush ($Line) {
@@ -923,9 +925,13 @@ function Get-SelectedInfo {
 function Set-Busy ($Busy, $Status) {
     $script:isBusy = [bool]$Busy
     $info = Get-SelectedInfo
+    # With no explicit status, a pending restart is still shown instead of "ready"
+    if (-not $Status -and $script:restartPending) { $Status = $Lang.StatusRestart }
     $window.Title = if ($Status) { "$($Lang.AppTitle) - $Status" } else { $Lang.AppTitle }
     $ui.txtStatus.Text  = if ($Status) { $Status } else { $Lang.StatusReady }
-    $ui.dotStatus.Fill  = if ($Status -eq $Lang.StatusFailed) { $brushSku } elseif ($Busy) { $brushBusy } else { $brushOk }
+    $ui.dotStatus.Fill  = if ($Status -eq $Lang.StatusFailed) { $brushSku }
+                          elseif ($Busy -or $Status -eq $Lang.StatusRestart) { $brushBusy }
+                          else { $brushOk }
     $ui.cmbTarget.IsEnabled  = -not $Busy -and $ui.cmbTarget.Items.Count -gt 0
     $ui.cmbKey.IsEnabled     = -not $Busy -and $null -ne $info
     $ui.txtKey.IsEnabled     = -not $Busy -and $null -ne $info
@@ -976,8 +982,9 @@ function Start-Background ([scriptblock]$Work, [object[]]$Arguments, [scriptbloc
 }
 
 $listWork = {
-    param($sync, $systemDir, $text)
-    $log = { param($m) $sync.Queue.Enqueue($m) }
+    param($sync, $systemDir, $text, $quiet)
+    # Quiet (refresh after a change): DISM output is not written to the log; errors still are
+    $log = if ($quiet) { { param($m) } } else { { param($m) $sync.Queue.Enqueue($m) } }
     try { $sync.Result = [pscustomobject]@{ Targets = @(Get-TargetEditions $systemDir $log $text) } }
     catch { $sync.Queue.Enqueue("[!] $($_.Exception.Message)") }
     finally { $sync.Done = $true }
@@ -1014,12 +1021,16 @@ $statusWork = {
 
 $onListed = {
     param($result)
-    Write-Log ""
+    # After a refresh the lists are rebuilt silently; only the first load writes them to the log
+    $quiet = $script:quietRefresh
+    $script:quietRefresh = $false
     if (-not $result) {
+        Write-Log ""
         Write-Log $Lang.LogListFailed
         Set-Busy $false $Lang.StatusFailed
         return
     }
+    if (-not $quiet) { Write-Log "" }
 
     # Editions Windows offers: green
     $targets = @($result.Targets | Where-Object { $_ })
@@ -1044,24 +1055,28 @@ $onListed = {
         [void]$ui.cmbTarget.Items.Add($item)
     }
 
-    if ($targets) {
-        Write-Log "[+] $($Lang.GroupUpgrade):"
-        foreach ($target in $targets) { Write-Log "    - $(Get-EditionName $target)" }
-    } else {
-        Write-Log "[!] $($Lang.NoneAvailable)"
-    }
-    # All SKU-method editions in one group
-    if ($skuEditions) {
+    if (-not $quiet) {
+        if ($targets) {
+            Write-Log "[+] $($Lang.GroupUpgrade):"
+            foreach ($target in $targets) { Write-Log "    - $(Get-EditionName $target)" }
+        } else {
+            Write-Log "[!] $($Lang.NoneAvailable)"
+        }
+        # All SKU-method editions in one group
+        if ($skuEditions) {
+            Write-Log ""
+            Write-Log "[i] $($Lang.GroupSku):"
+            foreach ($s in $skuEditions) { Write-Log "    - $($s.Name)" }
+        }
         Write-Log ""
-        Write-Log "[i] $($Lang.GroupSku):"
-        foreach ($s in $skuEditions) { Write-Log "    - $($s.Name)" }
     }
 
-    Write-Log ""
     if ($ui.cmbTarget.Items.Count) {
         $ui.cmbTarget.SelectedIndex = 0
-        Write-Log $Lang.LogLegend
-        Write-Log $Lang.LogPick
+        if (-not $quiet) {
+            Write-Log $Lang.LogLegend
+            Write-Log $Lang.LogPick
+        }
     }
     Set-Busy $false
 }
@@ -1080,10 +1095,38 @@ $onConverted = {
         } catch {
             Write-Log $Lang.LogOpenFailed
         }
-        Set-Busy $true $Lang.StatusRestart
+        # Read everything again so the window shows the new state (edition, DISM list, key choices)
+        $script:restartPending = $true
+        Invoke-Refresh
     } else {
+        # Keep the current choices on failure so another key can be tried
         Set-Busy $false $Lang.StatusFailed
     }
+}
+
+# Refresh: re-read the running edition, then run DISM again and rebuild the lists.
+# Called only after a successful change. Silent: nothing new is written to the log.
+function Invoke-Refresh {
+    try {
+        $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+        $script:build          = [int]$cv.CurrentBuildNumber
+        $script:currentEdition = $cv.EditionID
+        $script:osName = try { (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).Caption -replace '^Microsoft\s+' } catch { "Windows 11 $($cv.EditionID)" }
+    } catch {}
+    $ui.txtCurrent.Text = '# ' + ($Lang.Current -f $osName, $currentEdition, $build)
+    $ui.txtEnv.Text     = 'PowerShell {0}.{1} | build {2} | {3}' -f $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor,
+                          $build, $(if ([Environment]::Is64BitProcess) { 'x64' } else { 'x86' })
+
+    # Clear the old lists and the reason box
+    $ui.cmbTarget.Items.Clear()
+    $ui.cmbTarget.Foreground = $brushText
+    $ui.cmbKey.Items.Clear()
+    $ui.txtKey.Visibility    = 'Collapsed'
+    $ui.hintBox.Visibility   = 'Collapsed'
+
+    $script:quietRefresh = $true
+    Set-Busy $true $Lang.StatusLoading
+    Start-Background $listWork @($systemDir, $Lang, $true) $onListed
 }
 
 $onStatusChecked = {
