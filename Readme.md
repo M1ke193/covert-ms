@@ -32,7 +32,7 @@ irm https://raw.githubusercontent.com/M1ke193/covert-ms/main/convertMS.ps1 | iex
 
 ### 2. Hiển thị phiên bản theo màu
 - **Màu xanh**: phiên bản DISM liệt kê, chuyển được bằng `changepk.exe`.
-- **Màu đỏ**: phiên bản DISM không liệt kê cho bản cài hiện tại, ví dụ hạ xuống Home, đổi giữa bản N và bản thường, từ LTSC hoặc bản Evaluation.
+- **Màu đỏ**: mọi phiên bản DISM không liệt kê cho bản cài hiện tại, tức là `changepk` không chuyển được (ví dụ đổi giữa bản N và bản thường, từ LTSC hoặc bản Evaluation).
 - Khi chọn một phiên bản, khung bên dưới hiển thị thông tin:
   - Xanh: phiên bản này được chuyển bằng `changepk`.
   - Đỏ: lý do chính thức của Microsoft.

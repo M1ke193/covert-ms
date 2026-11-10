@@ -31,9 +31,6 @@ OffSE             = chuyển Windows 11 SE sang phiên bản khác
 OffChina          = chuyển Home China sang phiên bản khác
 OffLtsc           = chuyển LTSC sang phiên bản thường (General Availability) tại chỗ
 OffN              = đổi tại chỗ giữa bản N và bản thường
-OffHome           = chuyển xuống Home
-OffHomeEnt        = chuyển thẳng từ Home lên Enterprise (phải lên Pro trước)
-OffDowngrade      = hạ cấp phiên bản tại chỗ
 OffOther          = chuyển sang phiên bản này từ bản cài hiện tại (DISM không liệt kê)
 
 ResultNotRun      = [!] Chưa chuyển đổi.
@@ -78,7 +75,6 @@ StatusError       = Không đọc được trạng thái kích hoạt: {0}
 
 ConTitle          = Chuyển đổi phiên bản Windows 11 (chế độ dòng lệnh)
 ConCurrent        = Hiện tại: {0} [{1}] - Build {2}
-ConSkuNote        = Hạ cấp phiên bản có thể không thực hiện được.
 ConKeyOptional    = Active key (Enter = bỏ qua)
 ConCheck          = [A] Kiểm tra trạng thái kích hoạt
 ConPrompt         = Nhập số, A, hoặc nhấn Enter để thoát
@@ -94,8 +90,6 @@ BtnConvert        = Chuyển đổi
 LblKeyUi          = Active key (nếu có):
 KeyTooltip        = Generic Key / GVLK Key: chỉ chọn phiên bản, không kích hoạt Windows. Nhập key của bạn: chuyển phiên bản rồi kích hoạt luôn.
 Current           = Hiện tại: {0}  [{1}]  -  Build {2}
-KindDowngrade     = Hạ cấp phiên bản
-KindViaPro        = Nâng cấp qua Pro trước
 GroupUpgrade      = Nâng cấp phiên bản (changepk)
 GroupSku          = Chuyển đổi phiên bản (Phải chép file SKU)
 TipOk             = Nâng cấp phiên bản bằng changepk
@@ -103,7 +97,7 @@ HintOk            = Chuyển sang {0} bằng changepk
 ConfirmTitle      = Xác nhận
 ConfirmBody       = Chuyển sang {0} bằng key chung?\n\nWindows sẽ cần khởi động lại và có thể tự khởi động lại.\nKey chung KHÔNG kích hoạt Windows, sau đó hãy nhập key bản quyền của bạn để tự kích hoạt.
 ConfirmBodyKey    = Chuyển sang {0} bằng key bạn nhập, rồi kích hoạt Windows?\n\nWindows sẽ cần khởi động lại và có thể tự khởi động lại.
-ConfirmSkuBody    = Chuyển sang {0}?\n\nHạ cấp phiên bản có thể không thực hiện được và có thể khiến Windows không kích hoạt hoặc không cập nhật được.\nCông cụ này KHÔNG kích hoạt Windows.
+ConfirmSkuBody    = Chuyển sang {0}?\n\nViệc chuyển này có thể không thực hiện được và có thể khiến Windows không kích hoạt hoặc không cập nhật được.\nCông cụ này KHÔNG kích hoạt Windows.
 
 LogBanner         = Công cụ chuyển đổi phiên bản Windows 11 - chỉ kích hoạt khi bạn nhập key bản quyền.
 LogReading        = [+] Đang đọc danh sách phiên bản mà microsfot có thể hỗ trợ chuyển đổi chính thống...
@@ -268,59 +262,38 @@ function Get-EditionName ($Id) {
     "Windows 11 $name"
 }
 
-# Describe the change from $From to $To for an edition DISM did NOT list (SKU file method).
-# Kind: Downgrade (a real downgrade), ViaPro (Home -> Enterprise, better through Pro first),
-#       Other (N <-> non-N, LTSC, Evaluation, Home China, SE, or not listed by DISM)
-function Get-SkuInfo ($From, $To) {
-    # Upgrade order inside the Pro / Enterprise / Education family (higher = later in the upgrade path)
-    $rank = @{ Professional = 1; ProfessionalWorkstation = 2; ProfessionalEducation = 3; Enterprise = 4; Education = 5 }
-    $fromIsN    = $From -cmatch 'N(Eval)?$'
-    $toIsN      = $To -cmatch 'N$'
-    $fromBase   = $From -creplace 'N?(Eval)?$', ''
-    $toBase     = $To -creplace 'N$', ''
+# Official reason shown in the red box for an edition DISM did NOT list (changepk cannot do it).
+# A few known cases get their own text; everything else is simply "not listed by DISM".
+function Get-SkuReason ($From, $To) {
+    $fromIsN = $From -cmatch 'N(Eval)?$'
+    $toIsN   = $To -cmatch 'N$'
 
-    # $case picks the official reason text: Off<case>
-    $kind, $case = if ($From -like '*Eval') {
-        'Other', 'Eval'
+    $case = if ($From -like '*Eval') {
+        'Eval'
     } elseif ($From -like 'CloudEdition*') {
-        'Other', 'SE'
+        'SE'
     } elseif ($From -eq 'CoreCountrySpecific') {
-        'Other', 'China'
+        'China'
     } elseif ($From -like '*EnterpriseS*' -and $To -notlike '*EnterpriseS*') {
-        'Other', 'Ltsc'
+        'Ltsc'
     } elseif ($fromIsN -ne $toIsN) {
-        'Other', 'N'
-    } elseif ($To -like 'Core*') {
-        'Downgrade', 'Home'
-    } elseif ($From -like 'Core*' -and $To -like 'Enterprise*') {
-        'ViaPro', 'HomeEnt'
-    } elseif ($rank.ContainsKey($fromBase) -and $rank.ContainsKey($toBase) -and $rank[$toBase] -lt $rank[$fromBase]) {
-        'Downgrade', 'Downgrade'
+        'N'
     } else {
-        'Other', 'Other'
+        'Other'
     }
-    [pscustomobject]@{
-        Kind     = $kind
-        Label    = if ($kind -eq 'Other') { '' } else { $Lang["Kind$kind"] }   # Other has no label (no KindOther text)
-        Official = $Lang.OfficialBox -f $Lang["Off$case"]
-    }
+    $Lang.OfficialBox -f $Lang["Off$case"]
 }
 
-# Editions from the catalog that DISM did not list, grouped by kind (downgrades first)
-$skuKinds = 'Downgrade', 'ViaPro', 'Other'
+# Editions from the catalog that DISM did not list (red), in catalog order
 function Get-SkuEditions ($Targets) {
-    $all = foreach ($e in $catalog) {
+    foreach ($e in $catalog) {
         if ($e -eq $currentEdition -or $Targets -contains $e) { continue }
-        $info = Get-SkuInfo $currentEdition $e
         [pscustomobject]@{
-            Edition = $e
-            Name    = Get-EditionName $e
-            Kind     = $info.Kind
-            Label    = $info.Label
-            Official = $info.Official
+            Edition  = $e
+            Name     = Get-EditionName $e
+            Official = Get-SkuReason $currentEdition $e
         }
     }
-    foreach ($kind in $skuKinds) { $all | Where-Object { $_.Kind -eq $kind } }
 }
 
 function Get-ResultMessage ($ExitCode) {
@@ -459,7 +432,7 @@ function Start-ConsoleMode {
     $skuEditions = @(Get-SkuEditions $targets)
     # One numbered list: green editions (changepk) first, then red ones (SKU file method)
     $choices = @(foreach ($t in $targets) { [pscustomobject]@{ Edition = $t; Name = (Get-EditionName $t); Sku = $false } }) +
-               @(foreach ($s in $skuEditions) { [pscustomobject]@{ Edition = $s.Edition; Name = $s.Name; Sku = $true; Label = $s.Label; Official = $s.Official } })
+               @(foreach ($s in $skuEditions) { [pscustomobject]@{ Edition = $s.Edition; Name = $s.Name; Sku = $true; Official = $s.Official } })
 
     while ($true) {
         Write-Host ""
@@ -479,7 +452,6 @@ function Start-ConsoleMode {
                 Write-Host ("  [{0}] {1}" -f ($i + 1), $c.Name) -ForegroundColor Green
             }
         }
-        if ($skuEditions) { Write-Host "  $($Lang.ConSkuNote)" -ForegroundColor DarkRed }
         Write-Host "  $($Lang.ConCheck)"
 
         $answer = (Read-Host $Lang.ConPrompt).Trim()
@@ -499,7 +471,6 @@ function Start-ConsoleMode {
         $edition = $choice.Edition
         if ($choice.Sku) {
             Write-Host ""
-            if ($choice.Label) { Write-Host "  $($choice.Label)" -ForegroundColor Red }
             Write-Host "  $($choice.Official)" -ForegroundColor Red
         }
 
@@ -916,7 +887,7 @@ try {
     })
 } catch {}
 
-# Each list item carries @{ Edition; Name; Sku; Label; Official } in its Tag
+# Each list item carries @{ Edition; Name; Sku; Official } in its Tag
 function Get-SelectedInfo {
     $item = $ui.cmbTarget.SelectedItem
     if ($item -and $item.Tag) { $item.Tag }
@@ -1040,7 +1011,7 @@ $onListed = {
         $item.Content    = $name
         $item.Foreground = $brushOk
         $item.ToolTip    = $Lang.TipOk
-        $item.Tag        = [pscustomobject]@{ Edition = $target; Name = $name; Sku = $false; Label = ''; Official = $null }
+        $item.Tag        = [pscustomobject]@{ Edition = $target; Name = $name; Sku = $false; Official = $null }
         [void]$ui.cmbTarget.Items.Add($item)
     }
 
@@ -1048,10 +1019,10 @@ $onListed = {
     $skuEditions = @(Get-SkuEditions $targets)
     foreach ($s in $skuEditions) {
         $item = [System.Windows.Controls.ComboBoxItem]::new()
-        $item.Content    = if ($s.Label) { "$($s.Name)  ($($s.Label))" } else { $s.Name }
+        $item.Content    = $s.Name
         $item.Foreground = $brushSku
         $item.ToolTip    = $s.Official
-        $item.Tag        = [pscustomobject]@{ Edition = $s.Edition; Name = $s.Name; Sku = $true; Label = $s.Label; Official = $s.Official }
+        $item.Tag        = [pscustomobject]@{ Edition = $s.Edition; Name = $s.Name; Sku = $true; Official = $s.Official }
         [void]$ui.cmbTarget.Items.Add($item)
     }
 
@@ -1160,7 +1131,7 @@ $ui.cmbTarget.Add_SelectionChanged({
         $ui.hintBox.BorderBrush = $brushSkuLine
         $ui.hintBox.Background  = $brushSkuBg
         $ui.txtHint.Foreground  = $brushSku
-        $ui.txtHint.Text        = if ($info.Label) { "$($info.Label)`n$($info.Official)" } else { $info.Official }
+        $ui.txtHint.Text        = $info.Official
     } else {
         $ui.hintBox.BorderBrush = $brushOkLine
         $ui.hintBox.Background  = $brushOkBg
