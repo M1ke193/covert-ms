@@ -110,7 +110,6 @@ LogChecking       = [+] Đang kiểm tra trạng thái kích hoạt...
 LogConverting     = [+] Đang chuyển sang {0}...
 StatusLoading     = Đang tải...
 StatusFailed      = Thất bại
-StatusRestart     = Cần khởi động lại để hoàn chỉnh
 StatusChecking    = Đang kiểm tra kích hoạt...
 StatusConverting  = Đang chuyển đổi...
 StatusReady       = Sẵn sàng
@@ -845,7 +844,6 @@ $brushBusy     = New-Brush '#D29922'
 $brushText     = New-Brush '#C9D1D9'
 
 $script:isBusy         = $true
-$script:restartPending = $false   # set after a successful change; the status bar keeps showing it
 $script:quietRefresh   = $false   # true while the silent refresh after a change is running
 
 # Colored log: [+] green, [!] red, [i] blue, "> command" purple, indented tool output muted
@@ -896,13 +894,9 @@ function Get-SelectedInfo {
 function Set-Busy ($Busy, $Status) {
     $script:isBusy = [bool]$Busy
     $info = Get-SelectedInfo
-    # With no explicit status, a pending restart is still shown instead of "ready"
-    if (-not $Status -and $script:restartPending) { $Status = $Lang.StatusRestart }
     $window.Title = if ($Status) { "$($Lang.AppTitle) - $Status" } else { $Lang.AppTitle }
     $ui.txtStatus.Text  = if ($Status) { $Status } else { $Lang.StatusReady }
-    $ui.dotStatus.Fill  = if ($Status -eq $Lang.StatusFailed) { $brushSku }
-                          elseif ($Busy -or $Status -eq $Lang.StatusRestart) { $brushBusy }
-                          else { $brushOk }
+    $ui.dotStatus.Fill  = if ($Status -eq $Lang.StatusFailed) { $brushSku } elseif ($Busy) { $brushBusy } else { $brushOk }
     $ui.cmbTarget.IsEnabled  = -not $Busy -and $ui.cmbTarget.Items.Count -gt 0
     $ui.cmbKey.IsEnabled     = -not $Busy -and $null -ne $info
     $ui.txtKey.IsEnabled     = -not $Busy -and $null -ne $info
@@ -1067,7 +1061,6 @@ $onConverted = {
             Write-Log $Lang.LogOpenFailed
         }
         # Read everything again so the window shows the new state (edition, DISM list, key choices)
-        $script:restartPending = $true
         Invoke-Refresh
     } else {
         # Keep the current choices on failure so another key can be tried
