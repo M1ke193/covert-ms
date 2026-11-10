@@ -38,20 +38,20 @@ OffOther          = chuyển sang phiên bản này từ bản cài hiện tại
 
 ResultNotRun      = [!] Chưa chuyển đổi.
 ResultOk1         = [+] Windows đã chấp nhận đổi phiên bản.
-ResultOk2         = [+] Hãy khởi động lại Windows để hoàn tất. Máy có thể tự khởi động lại.
+ResultOk2         = [+] Hãy khởi động lại Windows để hoàn tất. Hoặc máy có thể tự khởi động lại.
 ResultOk3         = [i] Nếu Windows chưa được kích hoạt, hãy nhập key bản quyền tại Cài đặt > Hệ thống > Kích hoạt.
 ActTrying         = [+] Đang kích hoạt Windows bằng key bạn nhập...
 ActOk             = [+] Kích hoạt thành công.
-ActLater          = [i] Chưa kích hoạt được lúc này ({0}). Windows sẽ tự kích hoạt sau khi khởi động lại (cần Internet); bấm Kiểm tra kích hoạt để xem.
+ActLater          = [i] Chưa kích hoạt được lúc này ({0}), Windows sẽ tự kích hoạt sau khi khởi động lại (có thể cần Internet). Bấm Kiểm tra kích hoạt để xem.
 LogUserKey        = [i] Dùng key bạn nhập: chuyển phiên bản rồi kích hoạt luôn.
 LogGenericKey     = [i] Dùng key chung đã chọn để chuyển phiên bản (không kích hoạt).
 KeyNeeded         = Hãy nhập Active key vào ô bên dưới.
-InvalidKeyHint    = [i] Windows từ chối key này (0xC004F050). Hãy chọn loại key khác trong ô Active key, hoặc nhập key bản quyền.
+InvalidKeyHint    = [i] Windows từ chối key này. Hãy chọn loại key khác trong ô Active key, hoặc nhập key bản quyền.
 KeyOptGeneric     = (Generic Key No Activation)
 KeyOptGvlk        = (GVLK Key No Activation)
 KeyOptUser        = Nhập key của bạn...
 KeyOptUserNote    = (Kích hoạt luôn sau khi chuyển)
-ResultFail1       = [!] Công cụ trả về mã lỗi 0x{0:X8}. Phiên bản chưa được thay đổi.
+ResultFail1       = [!] Mã lỗi 0x{0:X8}. Phiên bản vẫn chưa được thay đổi.
 ResultFail2       = [!] Hãy kiểm tra key có đúng với phiên bản đã chọn không.
 DismFailed        = DISM bị lỗi, mã thoát 0x{0:X8}.
 KeyFormat         = Active key phải có dạng XXXXX-XXXXX-XXXXX-XXXXX-XXXXX.
@@ -97,20 +97,18 @@ Current           = Hiện tại: {0}  [{1}]  -  Build {2}
 KindDowngrade     = Hạ cấp phiên bản
 KindViaPro        = Nâng cấp qua Pro trước
 GroupUpgrade      = Nâng cấp phiên bản (changepk)
-GroupDowngrade    = Hạ cấp phiên bản (Phải chép file SKU)
-GroupViaPro       = Nâng cấp qua Pro trước (Phải chép file SKU)
-GroupOther        = Chuyển đổi phiên bản (Phải chép file SKU)
+GroupSku          = Chuyển đổi phiên bản (Phải chép file SKU)
 TipOk             = Nâng cấp phiên bản bằng changepk
 HintOk            = Chuyển sang {0} bằng changepk
 ConfirmTitle      = Xác nhận
-ConfirmBody       = Chuyển sang {0} bằng key chung?\n\nWindows sẽ cần khởi động lại và có thể tự khởi động lại.\nKey chung KHÔNG kích hoạt Windows: sau đó hãy nhập key bản quyền để kích hoạt.
+ConfirmBody       = Chuyển sang {0} bằng key chung?\n\nWindows sẽ cần khởi động lại và có thể tự khởi động lại.\nKey chung KHÔNG kích hoạt Windows, sau đó hãy nhập key bản quyền của bạn để tự kích hoạt.
 ConfirmBodyKey    = Chuyển sang {0} bằng key bạn nhập, rồi kích hoạt Windows?\n\nWindows sẽ cần khởi động lại và có thể tự khởi động lại.
 ConfirmSkuBody    = Chuyển sang {0}?\n\nHạ cấp phiên bản có thể không thực hiện được và có thể khiến Windows không kích hoạt hoặc không cập nhật được.\nCông cụ này KHÔNG kích hoạt Windows.
 
 LogBanner         = Công cụ chuyển đổi phiên bản Windows 11 - chỉ kích hoạt khi bạn nhập key bản quyền.
 LogReading        = [+] Đang đọc danh sách phiên bản mà microsfot có thể hỗ trợ chuyển đổi chính thống...
 LogListFailed     = [!] Không đọc được danh sách phiên bản từ DISM.
-LogLegend         = [i] Màu xanh: nâng cấp phiên bản bằng changepk (Được support). Màu đỏ: Script tự Download và chép file SKU.
+LogLegend         = [i] Màu xanh lá: nâng cấp phiên bản bằng changepk (Được support). Màu đỏ: Script tự Download và chép file SKU.
 LogPick           = [i] Chọn phiên bản, điền ActiveKey nếu có, rồi bấm Chuyển đổi.
 LogOpening        = [+] Đang mở Cài đặt > Hệ thống > Kích hoạt...
 LogOpenFailed     = [!] Không mở được trang Kích hoạt. Hãy tự mở Cài đặt > Hệ thống > Kích hoạt.
@@ -470,12 +468,12 @@ function Start-ConsoleMode {
         } else {
             Write-Warning $Lang.NoneAvailable
         }
-        $lastGroup = $null
+        $skuHeader = $false
         for ($i = 0; $i -lt $choices.Count; $i++) {
             $c = $choices[$i]
             if ($c.Sku) {
-                $group = ($skuEditions | Where-Object { $_.Edition -eq $c.Edition }).Kind
-                if ($group -ne $lastGroup) { Write-Host "$($Lang["Group$group"]):" -ForegroundColor Red; $lastGroup = $group }
+                # All SKU-method editions share one heading
+                if (-not $skuHeader) { Write-Host "$($Lang.GroupSku):" -ForegroundColor Red; $skuHeader = $true }
                 Write-Host ("  [{0}] {1}" -f ($i + 1), $c.Name) -ForegroundColor Red
             } else {
                 Write-Host ("  [{0}] {1}" -f ($i + 1), $c.Name) -ForegroundColor Green
@@ -1052,12 +1050,11 @@ $onListed = {
     } else {
         Write-Log "[!] $($Lang.NoneAvailable)"
     }
-    foreach ($kind in $skuKinds) {
-        $group = @($skuEditions | Where-Object { $_.Kind -eq $kind })
-        if (-not $group) { continue }
+    # All SKU-method editions in one group
+    if ($skuEditions) {
         Write-Log ""
-        Write-Log "[i] $($Lang["Group$kind"]):"
-        foreach ($s in $group) { Write-Log "    - $($s.Name)" }
+        Write-Log "[i] $($Lang.GroupSku):"
+        foreach ($s in $skuEditions) { Write-Log "    - $($s.Name)" }
     }
 
     Write-Log ""
