@@ -2,7 +2,7 @@
 
 Script PowerShell có giao diện WPF để **chuyển đổi phiên bản Windows 11 ngay trên máy đang chạy** (ví dụ Home → Pro, Pro → Education / Enterprise), dùng các công cụ có sẵn của Windows.
 
-> Script **chỉ kích hoạt Windows khi bạn nhập key bản quyền** vào ô Active key. Nếu để trống, script dùng key chung để chuyển phiên bản và Windows sẽ chưa được kích hoạt.
+> Script **chỉ kích hoạt Windows khi bạn chọn "Nhập key của bạn" và nhập key bản quyền**. Với Generic Key hoặc GVLK Key, script chỉ chuyển phiên bản; Windows sẽ chưa được kích hoạt.
 
 ## Yêu cầu
 
@@ -38,18 +38,27 @@ irm https://raw.githubusercontent.com/M1ke193/covert-ms/main/convertMS.ps1 | iex
   - Đỏ: lý do chính thức của Microsoft.
 
 ### 3. Chuyển phiên bản
-Chọn phiên bản, nhập **Active key** nếu có, rồi bấm **Chuyển đổi** và xác nhận.
+Chọn phiên bản, chọn loại key trong ô **Active key**, rồi bấm **Chuyển đổi** và xác nhận.
 
-**Có nhập key bản quyền:**
+Ô **Active key** là ô chọn có tối đa 3 mục. Mỗi mục hiện key ở dòng trên và ghi chú trong ngoặc ở dòng dưới:
+
+| Mục | Ví dụ (Pro) | Ghi chú | Kết quả |
+|---|---|---|---|
+| **Generic Key** (chọn sẵn) | `VK7JG-NPHTM-C97JM-9MPGT-3V66T` | `(Generic Key No Activation)` | Chỉ chuyển phiên bản, không kích hoạt |
+| **GVLK Key** | `W269N-WFGWX-YVC9B-4J6C9-T83GX` | `(GVLK Key No Activation)` | Chỉ chuyển phiên bản, không kích hoạt |
+| **Nhập key của bạn...** | (hiện ô nhập bên dưới) | `(Kích hoạt luôn sau khi chuyển)` | Chuyển phiên bản rồi kích hoạt luôn |
+
+- **Generic Key** là key cài đặt chung (danh sách cộng đồng, không có trên trang KMS của Microsoft). **GVLK Key** là key KMS client do Microsoft công bố. Cả hai chỉ dùng để chọn phiên bản.
+- Script dùng **đúng key bạn chọn**, không tự thử key khác. Nếu Windows từ chối với lỗi `0xC004F050` (key không hợp lệ cho bản cài này, ví dụ GVLK khi đi từ Home), log gợi ý chọn loại key khác.
+- Phiên bản thiếu loại key nào thì ô chọn ẩn mục đó:
+  - Generic Key có cho: Home, Home N, Home Single Language, Home Country Specific, Pro, Pro N, Pro for Workstations (N), Pro Education (N), Education (N), Enterprise (N), Enterprise G N.
+  - GVLK có cho: Pro, Pro N, Pro for Workstations (N), Pro Education (N), Education (N), Enterprise (N), Enterprise G (N), Enterprise LTSC (N), IoT Enterprise LTSC.
+  - Phiên bản không có cả hai (ví dụ IoT Enterprise, Enterprise multi-session, SE) chỉ còn mục "Nhập key của bạn".
+
+**Khi chọn "Nhập key của bạn":**
 1. Chạy `changepk.exe /ProductKey <key của bạn>` để chuyển phiên bản.
 2. Nếu thành công, **kích hoạt luôn** với Microsoft (tương đương `slmgr /ato`, xem mục *Về kích hoạt*).
 3. Nếu Windows chưa kích hoạt được trước khi khởi động lại, log ghi rõ. Windows sẽ tự kích hoạt sau khi khởi động lại (cần Internet).
-
-**Để trống ô Active key:** áp dụng cho mọi phiên bản đang chạy. Script dùng key chung, không hiển thị trong ô, chỉ để chọn phiên bản và **không kích hoạt**. Thứ tự thử:
-1. **Key cài đặt chung** của phiên bản đích (ví dụ Pro: `VK7JG-…-3V66T`). Đây là cách cộng đồng hay dùng, không có trên trang KMS của Microsoft.
-2. Nếu Windows từ chối key đó với lỗi `0xC004F050` (key không hợp lệ cho bản cài này), script tự thử tiếp **key chung GVLK** do Microsoft công bố.
-
-Key cài đặt chung có cho: Home, Home N, Home Single Language, Home Country Specific, Pro, Pro N, Pro for Workstations (N), Pro Education (N), Education (N), Enterprise (N), Enterprise G N. GVLK có thêm cho Enterprise G, Enterprise LTSC, IoT Enterprise LTSC. Phiên bản không có key chung nào (ví dụ IoT Enterprise, Enterprise multi-session, SE) cần bạn tự nhập key.
 
 **Sau khi chuyển thành công** (dù đã kích hoạt hay chưa), script luôn **mở trang Cài đặt > Hệ thống > Kích hoạt** để bạn xem trạng thái hoặc nhập key bản quyền. Cần khởi động lại để hoàn tất; máy có thể tự khởi động lại.
 
@@ -79,7 +88,7 @@ Script chỉ dùng các thành phần **có sẵn trong Windows**:
 | Công cụ | Dùng để |
 |---|---|
 | `dism.exe /Online /Get-TargetEditions` | Lấy danh sách phiên bản có thể chuyển |
-| `changepk.exe /ProductKey <key>` | Chuyển sang phiên bản đã chọn (ô key trống: thử lần lượt các key chung) |
+| `changepk.exe /ProductKey <key>` | Chuyển sang phiên bản đã chọn, bằng key chọn trong ô Active key |
 | WMI `SoftwareLicensingProduct` (`Get-CimInstance`) | Đọc trạng thái kích hoạt (thay cho `slmgr /dli` và `/xpr`, không cần VBScript) |
 | WMI `SoftwareLicensingProduct.Activate` (`Invoke-CimMethod`) | Kích hoạt trực tuyến khi bạn nhập key bản quyền (tương đương `slmgr /ato`) |
 | `ms-settings:activation` | Mở trang Kích hoạt trong Cài đặt sau khi chuyển |

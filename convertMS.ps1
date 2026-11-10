@@ -44,9 +44,13 @@ ActTrying         = [+] Đang kích hoạt Windows bằng key bạn nhập...
 ActOk             = [+] Kích hoạt thành công.
 ActLater          = [i] Chưa kích hoạt được lúc này ({0}). Windows sẽ tự kích hoạt sau khi khởi động lại (cần Internet); bấm Kiểm tra kích hoạt để xem.
 LogUserKey        = [i] Dùng key bạn nhập: chuyển phiên bản rồi kích hoạt luôn.
-LogGenericKey     = [i] Không nhập key: dùng key chung để chọn phiên bản (không kích hoạt).
-LogRetryKey       = [i] Windows từ chối key chung này (0xC004F050), thử key chung tiếp theo...
-KeyNeeded         = Phiên bản này không có key chung: hãy nhập Active key.
+LogGenericKey     = [i] Dùng key chung đã chọn để chuyển phiên bản (không kích hoạt).
+KeyNeeded         = Hãy nhập Active key vào ô bên dưới.
+InvalidKeyHint    = [i] Windows từ chối key này (0xC004F050). Hãy chọn loại key khác trong ô Active key, hoặc nhập key bản quyền.
+KeyOptGeneric     = (Generic Key No Activation)
+KeyOptGvlk        = (GVLK Key No Activation)
+KeyOptUser        = Nhập key của bạn...
+KeyOptUserNote    = (Kích hoạt luôn sau khi chuyển)
 ResultFail1       = [!] Công cụ trả về mã lỗi 0x{0:X8}. Phiên bản chưa được thay đổi.
 ResultFail2       = [!] Hãy kiểm tra key có đúng với phiên bản đã chọn không.
 DismFailed        = DISM bị lỗi, mã thoát 0x{0:X8}.
@@ -79,7 +83,7 @@ ConKeyOptional    = Active key (Enter = bỏ qua)
 ConCheck          = [A] Kiểm tra trạng thái kích hoạt
 ConPrompt         = Nhập số, A, hoặc nhấn Enter để thoát
 ConInvalid        = Lựa chọn không hợp lệ.
-ConKeyGeneric     = Active key (nhập key bản quyền để kích hoạt luôn; Enter = dùng key chung, không kích hoạt)
+ConKeyPick        = Chọn key (Enter = 1)
 ConKey            = Active key
 ConConfirm        = Gõ YES để chuyển sang {0}
 ConActivate       = Hãy kích hoạt trong Cài đặt (Settings) > Hệ thống > Kích hoạt.
@@ -88,7 +92,7 @@ NoneAvailable     = DISM không liệt kê phiên bản nâng cấp nào cho b�
 BtnStatus         = Kiểm tra kích hoạt
 BtnConvert        = Chuyển đổi
 LblKeyUi          = Active key (nếu có):
-KeyTooltip        = Nhập key bản quyền: chuyển phiên bản rồi kích hoạt luôn. Để trống: dùng key chung, chỉ chọn phiên bản, không kích hoạt Windows.
+KeyTooltip        = Generic Key / GVLK Key: chỉ chọn phiên bản, không kích hoạt Windows. Nhập key của bạn: chuyển phiên bản rồi kích hoạt luôn.
 Current           = Hiện tại: {0}  [{1}]  -  Build {2}
 KindDowngrade     = Hạ cấp phiên bản
 KindViaPro        = Nâng cấp qua Pro trước
@@ -200,7 +204,8 @@ $genericKeys = @{
 
 # Generic installation keys (default setup keys). They also only select the edition and never activate.
 # Windows rejects the Volume (GVLK) keys above from some editions (for example Home) with 0xC004F050,
-# so these are tried first when the key box is left empty. Community workaround: not on the Microsoft KMS page.
+# so this "Generic Key" is the default choice in the Active key selector. Community list: not on the
+# Microsoft KMS page.
 $setupKeys = @{
     Core                     = 'YTMG3-N6DKC-DKB77-7M9GH-8HVX7'
     CoreN                    = '4CPRK-NM3K3-X6XXQ-RXX86-WXCHW'
@@ -219,10 +224,17 @@ $setupKeys = @{
     EnterpriseGN             = 'FW7NV-4T673-HF4VX-9X4MM-B4H4T'
 }
 
-# Keys tried, in order, when the user leaves the box empty (from any edition): setup key, then GVLK.
-# Invoke-EditionChange moves to the next key only when Windows rejects one as invalid (0xC004F050).
-function Get-DefaultKeys ($Edition) {
-    @(@($setupKeys[$Edition], $genericKeys[$Edition]) | Where-Object { $_ } | Select-Object -Unique)
+# Choices for the Active key selector of one edition, as Tuple(Kind, Text, Note):
+#   Generic = setup key, Gvlk = GVLK (both only select the edition), User = the user types a key.
+# A kind is left out when the edition has no such key. The first choice is the default.
+function Get-KeyOptions ($Edition) {
+    if ($setupKeys[$Edition]) {
+        [System.Tuple[string, string, string]]::new('Generic', $setupKeys[$Edition], $Lang.KeyOptGeneric)
+    }
+    if ($genericKeys[$Edition]) {
+        [System.Tuple[string, string, string]]::new('Gvlk', $genericKeys[$Edition], $Lang.KeyOptGvlk)
+    }
+    [System.Tuple[string, string, string]]::new('User', $Lang.KeyOptUser, $Lang.KeyOptUserNote)
 }
 
 $keyPattern = '^([A-Z0-9]{5}-){4}[A-Z0-9]{5}$'
@@ -366,15 +378,8 @@ function Get-TargetEditions ($SystemDir, $Log, $Text) {
 }
 
 # Change the edition with changepk.exe (green editions: listed by DISM)
-# $Keys: one key, or several to try in order. The next key is tried only when Windows rejects
-# the previous one as invalid (0xC004F050); any other result is returned straight away.
-function Invoke-EditionChange ($Keys, $SystemDir, $Log, $Text) {
-    $Keys = @($Keys)
-    for ($i = 0; $i -lt $Keys.Count; $i++) {
-        $code = (Invoke-Tool ([IO.Path]::Combine($SystemDir, 'changepk.exe')) "/ProductKey $($Keys[$i])" $Log $Keys[$i]).ExitCode
-        if ($code -ne -1073418160 -or $i -eq $Keys.Count - 1) { return $code }   # -1073418160 = 0xC004F050
-        if ($Text) { & $Log $Text.LogRetryKey }
-    }
+function Invoke-EditionChange ($Key, $SystemDir, $Log) {
+    (Invoke-Tool ([IO.Path]::Combine($SystemDir, 'changepk.exe')) "/ProductKey $Key" $Log $Key).ExitCode
 }
 
 # Activate the installed Windows key online with Microsoft (same as slmgr /ato).
@@ -494,36 +499,45 @@ function Start-ConsoleMode {
 
         $choice  = $choices[$n - 1]
         $edition = $choice.Edition
-        $defaults = Get-DefaultKeys $edition
-        $generic  = $defaults | Select-Object -First 1
         if ($choice.Sku) {
             Write-Host ""
             if ($choice.Label) { Write-Host "  $($choice.Label)" -ForegroundColor Red }
             Write-Host "  $($choice.Official)" -ForegroundColor Red
-            $prompt = if ($generic) { $Lang.ConKeyGeneric } else { $Lang.ConKeyOptional }
-        } else {
-            $prompt = if ($generic) { $Lang.ConKeyGeneric } else { $Lang.ConKey }
         }
-        $key     = (Read-Host $prompt).Trim().ToUpper()
-        $userKey = [bool]$key
-        if ($key -and $key -notmatch $keyPattern) {
-            Write-Warning $Lang.KeyFormat
+
+        # Same three key choices as the window: generic key, GVLK key, or the user's own key
+        $options = @(Get-KeyOptions $edition)
+        Write-Host ""
+        for ($i = 0; $i -lt $options.Count; $i++) {
+            Write-Host ("  [{0}] {1}  {2}" -f ($i + 1), $options[$i].Item2, $options[$i].Item3)
+        }
+        $pick = (Read-Host $Lang.ConKeyPick).Trim()
+        $p    = if ($pick) { $pick -as [int] } else { 1 }
+        if (-not $p -or $p -lt 1 -or $p -gt $options.Count) {
+            Write-Warning $Lang.ConInvalid
             continue
         }
-        # Typed key: only that key. Empty: the generic keys, tried in order
-        $keys = if ($key) { @($key) } else { $defaults }
-        if (-not $choice.Sku -and -not $keys) {
-            Write-Warning $Lang.KeyNeeded
+        $option  = $options[$p - 1]
+        $userKey = $option.Item1 -eq 'User'
+        $key     = if ($userKey) {
+            (Read-Host $(if ($choice.Sku) { $Lang.ConKeyOptional } else { $Lang.ConKey })).Trim().ToUpper()
+        } else {
+            $option.Item2
+        }
+        # The SKU method may run without a key; changepk always needs one
+        if (($key -or -not $choice.Sku) -and $key -notmatch $keyPattern) {
+            Write-Warning $Lang.KeyFormat
             continue
         }
 
         if ((Read-Host ($Lang.ConConfirm -f $choice.Name)) -ne 'YES') { continue }
         $code = if ($choice.Sku) {
-            Invoke-SkuConversion $edition ([string]($keys | Select-Object -First 1)) $systemDir $log $Lang
+            Invoke-SkuConversion $edition $key $systemDir $log $Lang
         } else {
-            Invoke-EditionChange $keys $systemDir $log $Lang
+            Invoke-EditionChange $key $systemDir $log
         }
         Get-ResultMessage $code | ForEach-Object { Write-Host $_ }
+        if ($code -eq -1073418160) { Write-Host $Lang.InvalidKeyHint }   # 0xC004F050
         if ($code -in 0, 3010) {
             if ($userKey -and -not $choice.Sku) { $null = Invoke-Activation $log $Lang }
             # Always show the Activation page after a successful change
@@ -550,7 +564,7 @@ if (-not $guiAvailable) {
 $xamlText = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="900" Height="600" MinWidth="700" MinHeight="440"
+        Width="960" Height="620" MinWidth="800" MinHeight="460"
         WindowStartupLocation="CenterScreen" Background="#0D1117" Foreground="#C9D1D9"
         FontFamily="Cascadia Mono, Cascadia Code, Consolas" FontSize="12.5"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
@@ -767,18 +781,35 @@ $xamlText = @'
         <!-- Body -->
         <DockPanel Grid.Row="1" Margin="18,14,18,14">
             <TextBlock x:Name="lblTarget" DockPanel.Dock="Top" Foreground="#8B949E" Margin="0,0,0,6"/>
-            <Grid DockPanel.Dock="Top" Height="34">
+            <Grid DockPanel.Dock="Top">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="46"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="270"/>
+                    <ColumnDefinition Width="300"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <ComboBox x:Name="cmbTarget" Grid.Column="0" IsEnabled="False" FontWeight="SemiBold"/>
                 <TextBlock x:Name="lblKey" Grid.Column="1" Margin="16,0,8,0" VerticalAlignment="Center" Foreground="#8B949E"/>
-                <TextBox x:Name="txtKey" Grid.Column="2" CharacterCasing="Upper" MaxLength="29"/>
+                <!-- Active key selector: each choice shows the key and, below it, a note in brackets -->
+                <ComboBox x:Name="cmbKey" Grid.Column="2" IsEnabled="False">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Margin="0,1">
+                                <TextBlock Text="{Binding Item2}" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding Item3}" Foreground="#8B949E" FontSize="11"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
                 <Button x:Name="btnConvert" Grid.Column="3" Style="{StaticResource PrimaryButton}" MinWidth="120"
                         Margin="10,0,0,0" IsEnabled="False"/>
+                <!-- Shown only for "type your own key" -->
+                <TextBox x:Name="txtKey" Grid.Row="1" Grid.Column="2" Height="34" Margin="0,8,0,0"
+                         CharacterCasing="Upper" MaxLength="29" Visibility="Collapsed"/>
             </Grid>
             <Border x:Name="hintBox" DockPanel.Dock="Top" Margin="0,10,0,0" Padding="12,8" BorderThickness="1"
                     CornerRadius="6" Visibility="Collapsed">
@@ -814,7 +845,7 @@ $xamlText = @'
 $window = [Windows.Markup.XamlReader]::Load([System.Xml.XmlNodeReader]::new($xaml))
 
 $ui = @{}
-foreach ($name in 'txtCurrent', 'btnStatus', 'lblTarget', 'cmbTarget', 'lblKey', 'txtKey', 'btnConvert',
+foreach ($name in 'txtCurrent', 'btnStatus', 'lblTarget', 'cmbTarget', 'lblKey', 'cmbKey', 'txtKey', 'btnConvert',
                   'hintBox', 'txtHint', 'lblLog', 'txtLog', 'logPara', 'dotStatus', 'txtStatus', 'txtEnv') {
     $ui[$name] = $window.FindName($name)
 }
@@ -824,6 +855,7 @@ $ui.btnStatus.Content  = $Lang.BtnStatus
 $ui.btnConvert.Content = $Lang.BtnConvert
 $ui.lblTarget.Text     = "// $($Lang.SecTarget)"
 $ui.lblKey.Text        = $Lang.LblKeyUi
+$ui.cmbKey.ToolTip     = $Lang.KeyTooltip
 $ui.txtKey.ToolTip     = $Lang.KeyTooltip
 $ui.lblLog.Text        = "// $($Lang.SecLog)"
 $ui.txtEnv.Text        = 'PowerShell {0}.{1} | build {2} | {3}' -f $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor,
@@ -897,6 +929,7 @@ function Set-Busy ($Busy, $Status) {
     $ui.txtStatus.Text  = if ($Status) { $Status } else { $Lang.StatusReady }
     $ui.dotStatus.Fill  = if ($Status -eq $Lang.StatusFailed) { $brushSku } elseif ($Busy) { $brushBusy } else { $brushOk }
     $ui.cmbTarget.IsEnabled  = -not $Busy -and $ui.cmbTarget.Items.Count -gt 0
+    $ui.cmbKey.IsEnabled     = -not $Busy -and $null -ne $info
     $ui.txtKey.IsEnabled     = -not $Busy -and $null -ne $info
     $ui.btnConvert.IsEnabled = -not $Busy -and $null -ne $info
     $ui.btnStatus.IsEnabled  = -not $Busy
@@ -953,10 +986,10 @@ $listWork = {
 }
 
 $convertWork = {
-    param($sync, $keys, $systemDir, $activate, $text)
+    param($sync, $key, $systemDir, $activate, $text)
     $log = { param($m) $sync.Queue.Enqueue($m) }
     try {
-        $code      = Invoke-EditionChange $keys $systemDir $log $text
+        $code      = Invoke-EditionChange $key $systemDir $log
         $activated = $false
         if ($activate -and $code -in 0, 3010) { $activated = Invoke-Activation $log $text }
         $sync.Result = [pscustomobject]@{ Code = $code; Activated = $activated }
@@ -1041,6 +1074,7 @@ $onConverted = {
     # $result = @{ Code; Activated }, or $null when the work threw before finishing
     $code = if ($result) { $result.Code } else { $null }
     Get-ResultMessage $code | ForEach-Object { Write-Log $_ }
+    if ($code -eq -1073418160) { Write-Log $Lang.InvalidKeyHint }   # 0xC004F050: try another key choice
     if ($code -in 0, 3010) {
         # Always show the Activation page after a successful change, activated or not
         Write-Log $Lang.LogOpening
@@ -1075,6 +1109,11 @@ $ui.cmbTarget.Add_SelectionChanged({
     # The closed box takes the color of the selected edition
     $ui.cmbTarget.Foreground = $item.Foreground
 
+    # Reload the key choices for this edition; the first one (generic key when it exists) is preselected
+    $ui.cmbKey.Items.Clear()
+    foreach ($option in Get-KeyOptions $info.Edition) { [void]$ui.cmbKey.Items.Add($option) }
+    $ui.cmbKey.SelectedIndex = 0
+
     # Box under the list: green for changepk, red with the official reason for the SKU method
     $ui.hintBox.Visibility = 'Visible'
     if ($info.Sku) {
@@ -1091,21 +1130,28 @@ $ui.cmbTarget.Add_SelectionChanged({
     Set-Busy $script:isBusy
 })
 
+# "Type your own key" shows the input box under the selector
+$ui.cmbKey.Add_SelectionChanged({
+    $option = $ui.cmbKey.SelectedItem
+    $custom = $null -ne $option -and $option.Item1 -eq 'User'
+    $ui.txtKey.Visibility = if ($custom) { 'Visible' } else { 'Collapsed' }
+    if ($custom -and -not $script:isBusy) { [void]$ui.txtKey.Focus() }
+})
+
 $ui.btnConvert.Add_Click({
-    $info = Get-SelectedInfo
-    $key  = $ui.txtKey.Text.Trim().ToUpper()
-    if (-not $info) { return }
-    # Typed key: convert with it, then activate. Empty box: generic keys behind the scenes
-    # (never shown), tried in order, no activation
-    $userKey = [bool]$key
-    if ($key -and $key -notmatch $keyPattern) {
-        Write-Log "[!] $($Lang.KeyFormat)"
+    $info   = Get-SelectedInfo
+    $option = $ui.cmbKey.SelectedItem
+    if (-not $info -or -not $option) { return }
+    # Generic / GVLK choice: that key, no activation. Own key: convert with it, then activate
+    $userKey = $option.Item1 -eq 'User'
+    $key     = if ($userKey) { $ui.txtKey.Text.Trim().ToUpper() } else { $option.Item2 }
+    # The SKU method may run without a key; changepk always needs one
+    if ($userKey -and -not $key -and -not $info.Sku) {
+        Write-Log "[!] $($Lang.KeyNeeded)"
         return
     }
-    $keys = if ($key) { @($key) } else { Get-DefaultKeys $info.Edition }
-    # The SKU method may run without a key; changepk always needs one
-    if (-not $info.Sku -and -not $keys) {
-        Write-Log "[!] $($Lang.KeyNeeded)"
+    if ($key -and $key -notmatch $keyPattern) {
+        Write-Log "[!] $($Lang.KeyFormat)"
         return
     }
     $question = if ($info.Sku) { $Lang.ConfirmSkuBody } elseif ($userKey) { $Lang.ConfirmBodyKey } else { $Lang.ConfirmBody }
@@ -1115,11 +1161,10 @@ $ui.btnConvert.Add_Click({
     Write-Log ""
     Write-Log ($Lang.LogConverting -f $info.Name)
     if ($info.Sku) {
-        Start-Background $skuWork @($info.Edition, [string]($keys | Select-Object -First 1), $systemDir, $Lang) $onConverted
+        Start-Background $skuWork @($info.Edition, [string]$key, $systemDir, $Lang) $onConverted
     } else {
         Write-Log $(if ($userKey) { $Lang.LogUserKey } else { $Lang.LogGenericKey })
-        # $keys stays one argument (an array) because the comma list does not flatten it
-        Start-Background $convertWork @($keys, $systemDir, $userKey, $Lang) $onConverted
+        Start-Background $convertWork @($key, $systemDir, $userKey, $Lang) $onConverted
     }
 })
 
