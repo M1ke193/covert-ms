@@ -94,6 +94,7 @@ GroupUpgrade      = Nâng cấp phiên bản (changepk)
 GroupSku          = Chuyển đổi phiên bản (Phải chép file SKU)
 TipOk             = Nâng cấp phiên bản bằng changepk
 HintOk            = Chuyển sang {0} bằng changepk
+HintForceSku      = Chuyển sang {0} bằng chép file SKU
 ConfirmTitle      = Xác nhận
 ConfirmBody       = Chuyển sang {0} bằng key chung?\n\nWindows sẽ cần khởi động lại và có thể tự khởi động lại.\nKey chung KHÔNG kích hoạt Windows, sau đó hãy nhập key bản quyền của bạn để tự kích hoạt.
 ConfirmBodyKey    = Chuyển sang {0} bằng key bạn nhập, rồi kích hoạt Windows?\n\nWindows sẽ cần khởi động lại và có thể tự khởi động lại.
@@ -115,6 +116,10 @@ StatusConverting  = Đang chuyển đổi...
 StatusReady       = Sẵn sàng
 SecTarget         = Chọn phiên bản window cần chuyển đổi
 SecLog            = Logs
+ChkForceSku       = Chuyển bằng chép file SKU (Khuyên dùng: tắt)
+ForceSkuWarn      = (Chỉ dùng khi việc chuyển đổi phiên bản Windows chính thống bằng changepk không thực hiện được, vì việc chép SKU có thể gây ra các vấn đề update Windows về sau)
+ConForceSku       = Chép file SKU? Gõ Y để dùng (Enter = không)
+LogForceSku       = [i] Chép file SKU thay cho changepk.
 '@
 
 if ($PSCommandPath) {
@@ -468,9 +473,15 @@ function Start-ConsoleMode {
 
         $choice  = $choices[$n - 1]
         $edition = $choice.Edition
+        $useSku  = [bool]$choice.Sku
         if ($choice.Sku) {
             Write-Host ""
             Write-Host "  $($choice.Official)" -ForegroundColor Red
+        } else {
+            # Green edition: optional "Force SKU" instead of changepk
+            Write-Host ""
+            Write-Host "  $($Lang.ForceSkuWarn)" -ForegroundColor Red
+            $useSku = (Read-Host $Lang.ConForceSku).Trim() -ieq 'Y'
         }
 
         # Same three key choices as the window: generic key, GVLK key, or the user's own key
@@ -488,18 +499,18 @@ function Start-ConsoleMode {
         $option  = $options[$p - 1]
         $userKey = $option.Item1 -eq 'User'
         $key     = if ($userKey) {
-            (Read-Host $(if ($choice.Sku) { $Lang.ConKeyOptional } else { $Lang.ConKey })).Trim().ToUpper()
+            (Read-Host $(if ($useSku) { $Lang.ConKeyOptional } else { $Lang.ConKey })).Trim().ToUpper()
         } else {
             $option.Item2
         }
         # The SKU method may run without a key; changepk always needs one
-        if (($key -or -not $choice.Sku) -and $key -notmatch $keyPattern) {
+        if (($key -or -not $useSku) -and $key -notmatch $keyPattern) {
             Write-Warning $Lang.KeyFormat
             continue
         }
 
         if ((Read-Host ($Lang.ConConfirm -f $choice.Name)) -ne 'YES') { continue }
-        $code = if ($choice.Sku) {
+        $code = if ($useSku) {
             Invoke-SkuConversion $edition $key $systemDir $log $Lang
         } else {
             Invoke-EditionChange $key $systemDir $log
@@ -507,7 +518,7 @@ function Start-ConsoleMode {
         Get-ResultMessage $code | ForEach-Object { Write-Host $_ }
         if ($code -eq -1073418160) { Write-Host $Lang.InvalidKeyHint }   # 0xC004F050
         if ($code -in 0, 3010) {
-            if ($userKey -and -not $choice.Sku) { $null = Invoke-Activation $log $Lang }
+            if ($userKey -and -not $useSku) { $null = Invoke-Activation $log $Lang }
             # Always show the Activation page after a successful change
             Write-Host "    $($Lang.ConActivate)"
             try { Start-Process 'ms-settings:activation' -ErrorAction Stop } catch {}
@@ -674,6 +685,39 @@ $xamlText = @'
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#C9D1D9"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <StackPanel Orientation="Horizontal" Background="Transparent">
+                            <Border x:Name="box" Width="16" Height="16" CornerRadius="4" BorderThickness="1"
+                                    BorderBrush="#30363D" Background="#0D1117" VerticalAlignment="Center">
+                                <Path x:Name="mark" Data="M3,7.5 L6,10.5 L12,4" Stroke="#FFFFFF" StrokeThickness="2"
+                                      Visibility="Collapsed"/>
+                            </Border>
+                            <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="box" Property="BorderBrush" Value="#8B949E"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="box" Property="Background" Value="#DA3633"/>
+                                <Setter TargetName="box" Property="BorderBrush" Value="#DA3633"/>
+                                <Setter TargetName="mark" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style TargetType="ComboBoxItem">
             <Setter Property="Template">
                 <Setter.Value>
@@ -776,8 +820,15 @@ $xamlText = @'
                         Margin="10,0,0,0" IsEnabled="False"/>
                 <!-- Shown only for "type your own key" -->
                 <TextBox x:Name="txtKey" Grid.Row="1" Grid.Column="2" Height="34" Margin="0,8,0,0"
-                         CharacterCasing="Upper" MaxLength="29" Visibility="Collapsed"/>
+                         VerticalAlignment="Top" CharacterCasing="Upper" MaxLength="29" Visibility="Collapsed"/>
             </Grid>
+            <!-- Shown only for green editions: use the SKU file method instead of changepk.
+                 Full width, warning kept on one line -->
+            <StackPanel x:Name="forceSkuPanel" DockPanel.Dock="Top" Margin="0,10,0,0" Visibility="Collapsed">
+                <CheckBox x:Name="chkForceSku"/>
+                <TextBlock x:Name="txtForceSkuWarn" Margin="24,4,0,0" Foreground="#FF7B72" FontSize="11.5"
+                           FontFamily="Segoe UI" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
             <Border x:Name="hintBox" DockPanel.Dock="Top" Margin="0,10,0,0" Padding="12,8" BorderThickness="1"
                     CornerRadius="6" Visibility="Collapsed">
                 <TextBlock x:Name="txtHint" TextWrapping="Wrap" LineHeight="19"/>
@@ -813,6 +864,7 @@ $window = [Windows.Markup.XamlReader]::Load([System.Xml.XmlNodeReader]::new($xam
 
 $ui = @{}
 foreach ($name in 'txtCurrent', 'btnStatus', 'lblTarget', 'cmbTarget', 'lblKey', 'cmbKey', 'txtKey', 'btnConvert',
+                  'forceSkuPanel', 'chkForceSku', 'txtForceSkuWarn',
                   'hintBox', 'txtHint', 'lblLog', 'txtLog', 'logPara', 'dotStatus', 'txtStatus', 'txtEnv') {
     $ui[$name] = $window.FindName($name)
 }
@@ -824,6 +876,8 @@ $ui.lblTarget.Text     = "// $($Lang.SecTarget)"
 $ui.lblKey.Text        = $Lang.LblKeyUi
 $ui.cmbKey.ToolTip     = $Lang.KeyTooltip
 $ui.txtKey.ToolTip     = $Lang.KeyTooltip
+$ui.chkForceSku.Content     = $Lang.ChkForceSku
+$ui.txtForceSkuWarn.Text    = $Lang.ForceSkuWarn
 $ui.lblLog.Text        = "// $($Lang.SecLog)"
 $ui.txtEnv.Text        = 'PowerShell {0}.{1} | build {2} | {3}' -f $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor,
                          $build, $(if ([Environment]::Is64BitProcess) { 'x64' } else { 'x86' })
@@ -900,6 +954,7 @@ function Set-Busy ($Busy, $Status) {
     $ui.cmbTarget.IsEnabled  = -not $Busy -and $ui.cmbTarget.Items.Count -gt 0
     $ui.cmbKey.IsEnabled     = -not $Busy -and $null -ne $info
     $ui.txtKey.IsEnabled     = -not $Busy -and $null -ne $info
+    $ui.chkForceSku.IsEnabled = -not $Busy -and $null -ne $info
     $ui.btnConvert.IsEnabled = -not $Busy -and $null -ne $info
     $ui.btnStatus.IsEnabled  = -not $Busy
 }
@@ -1087,6 +1142,8 @@ function Invoke-Refresh {
     $ui.cmbKey.Items.Clear()
     $ui.txtKey.Visibility    = 'Collapsed'
     $ui.hintBox.Visibility   = 'Collapsed'
+    $ui.chkForceSku.IsChecked     = $false
+    $ui.forceSkuPanel.Visibility  = 'Collapsed'
 
     $script:quietRefresh = $true
     Set-Busy $true $Lang.StatusLoading
@@ -1118,21 +1175,33 @@ $ui.cmbTarget.Add_SelectionChanged({
     foreach ($option in Get-KeyOptions $info.Edition) { [void]$ui.cmbKey.Items.Add($option) }
     $ui.cmbKey.SelectedIndex = 0
 
-    # Box under the list: green for changepk, red with the official reason for the SKU method
-    $ui.hintBox.Visibility = 'Visible'
-    if ($info.Sku) {
-        $ui.hintBox.BorderBrush = $brushSkuLine
-        $ui.hintBox.Background  = $brushSkuBg
-        $ui.txtHint.Foreground  = $brushSku
-        $ui.txtHint.Text        = $info.Official
-    } else {
-        $ui.hintBox.BorderBrush = $brushOkLine
-        $ui.hintBox.Background  = $brushOkBg
-        $ui.txtHint.Foreground  = $brushOk
-        $ui.txtHint.Text        = $Lang.HintOk -f $info.Name
-    }
+    # "Force SKU" option: only for green editions (red ones always use the SKU method); reset on every change
+    $ui.chkForceSku.IsChecked    = $false
+    $ui.forceSkuPanel.Visibility = if ($info.Sku) { 'Collapsed' } else { 'Visible' }
+
+    Update-Hint
     Set-Busy $script:isBusy
 })
+
+# Box under the list:
+#   red edition            -> red, official reason
+#   green + "Force SKU"    -> red, converted with the SKU file method
+#   green                  -> green, converted with changepk
+function Update-Hint {
+    $info = Get-SelectedInfo
+    if (-not $info) { return }
+    $ui.hintBox.Visibility = 'Visible'
+    $red = $info.Sku -or ($ui.chkForceSku.IsChecked -eq $true)
+    $ui.hintBox.BorderBrush = if ($red) { $brushSkuLine } else { $brushOkLine }
+    $ui.hintBox.Background  = if ($red) { $brushSkuBg } else { $brushOkBg }
+    $ui.txtHint.Foreground  = if ($red) { $brushSku } else { $brushOk }
+    $ui.txtHint.Text        = if ($info.Sku) { $info.Official }
+                              elseif ($red) { $Lang.HintForceSku -f $info.Name }
+                              else { $Lang.HintOk -f $info.Name }
+}
+
+$ui.chkForceSku.Add_Checked({ Update-Hint })
+$ui.chkForceSku.Add_Unchecked({ Update-Hint })
 
 # "Type your own key" shows the input box under the selector
 $ui.cmbKey.Add_SelectionChanged({
@@ -1149,8 +1218,10 @@ $ui.btnConvert.Add_Click({
     # Generic / GVLK choice: that key, no activation. Own key: convert with it, then activate
     $userKey = $option.Item1 -eq 'User'
     $key     = if ($userKey) { $ui.txtKey.Text.Trim().ToUpper() } else { $option.Item2 }
+    # Red editions always use the SKU method; green ones only when "Force SKU" is ticked
+    $useSku  = $info.Sku -or ($ui.chkForceSku.IsChecked -eq $true)
     # The SKU method may run without a key; changepk always needs one
-    if ($userKey -and -not $key -and -not $info.Sku) {
+    if ($userKey -and -not $key -and -not $useSku) {
         Write-Log "[!] $($Lang.KeyNeeded)"
         return
     }
@@ -1158,13 +1229,14 @@ $ui.btnConvert.Add_Click({
         Write-Log "[!] $($Lang.KeyFormat)"
         return
     }
-    $question = if ($info.Sku) { $Lang.ConfirmSkuBody } elseif ($userKey) { $Lang.ConfirmBodyKey } else { $Lang.ConfirmBody }
+    $question = if ($useSku) { $Lang.ConfirmSkuBody } elseif ($userKey) { $Lang.ConfirmBodyKey } else { $Lang.ConfirmBody }
     if ([System.Windows.MessageBox]::Show(($question -f $info.Name), $Lang.ConfirmTitle, 'YesNo', 'Warning') -ne 'Yes') { return }
 
     Set-Busy $true $Lang.StatusConverting
     Write-Log ""
     Write-Log ($Lang.LogConverting -f $info.Name)
-    if ($info.Sku) {
+    if ($useSku) {
+        if (-not $info.Sku) { Write-Log $Lang.LogForceSku }
         Start-Background $skuWork @($info.Edition, [string]$key, $systemDir, $Lang) $onConverted
     } else {
         Write-Log $(if ($userKey) { $Lang.LogUserKey } else { $Lang.LogGenericKey })
