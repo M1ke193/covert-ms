@@ -4,7 +4,8 @@
    - DISM /Online /Get-TargetEditions : lists the editions this installation can move to
    - changepk.exe /ProductKey         : changes the edition
  Editions that DISM does not list are shown in red and go through Invoke-SkuConversion
- (the SKU file method). That function is a stub: write your own logic in it.
+ (the SKU file method): it downloads the edition's license files, copies them to
+ spp\tokens\skus, reloads them with slmgr /rilc and installs the key with slmgr /ipk.
  This tool does not activate Windows. After converting, activate it with your own license.
 
  ENCODING: save this file as UTF-8 WITHOUT BOM, and keep every non-ASCII character inside the
@@ -23,7 +24,14 @@ NeedWin11         = Script này chỉ hỗ trợ Windows 11 (máy đang chạy: 
 Relaunching       = Cần quyền quản trị. Đang mở lại script với quyền quản trị...
 ElevationCancel   = Bạn đã hủy yêu cầu quyền quản trị.
 
-SkuNotWritten     = [!] Chưa có logic chép file SKU. Hãy viết logic trong hàm Invoke-SkuConversion.
+SkuNoKey          = [!] Cần một key của phiên bản đích để chép file SKU.
+SkuDownload       = [+] Đang tải gói file SKU cho {0}...
+SkuDownloadFail   = [!] Không tải được gói file SKU: {0}
+SkuNoFiles        = [!] Gói file SKU không có file license (.xrm-ms) nào.
+SkuCopy           = [+] Đang chép {0} file license vào spp\tokens\skus\{1}...
+SkuRilc           = [+] Đang nạp lại license của Windows (slmgr /rilc), có thể mất vài phút...
+SkuClean          = [+] Đang gỡ key cũ (slmgr /upk, /ckms, /cpky)...
+SkuIpk            = [+] Đang cài key của phiên bản mới (slmgr /ipk)...
 
 OfficialBox       = Cảnh báo: theo chính thống, Microsoft không hỗ trợ {0}, việc chuyển bắt buộc cài lại Windows. Hiện tại nếu đổi sẽ áp dụng việc chép file SKU, việc chép SKU sẽ gây 1 số vấn đề trong tương lai khi update window.
 OffEval           = chuyển bản Evaluation (dùng thử) sang bản chính thức
@@ -72,10 +80,12 @@ LblKey            = Key         : *****-*****-*****-*****-{0}
 LblStatus         = Trạng thái  : {0}
 LblExpiry         = Hết hạn     : {0}
 StatusError       = Không đọc được trạng thái kích hoạt: {0}
+SlmgrMissing      = [!] Không tìm thấy {0}. VBScript có thể đã bị gỡ khỏi Windows (Settings > System > Optional features).
+SlmgrFailed       = [!] slmgr báo lỗi, mã thoát 0x{0:X8}.
 
 ConTitle          = Chuyển đổi phiên bản Windows 11 (chế độ dòng lệnh)
 ConCurrent        = Hiện tại: {0} [{1}] - Build {2}
-ConKeyOptional    = Active key (Enter = bỏ qua)
+ConKeyOptional    = Active key (Enter = dùng key chung)
 ConCheck          = [A] Kiểm tra trạng thái kích hoạt
 ConPrompt         = Nhập số, A, hoặc nhấn Enter để thoát
 ConInvalid        = Lựa chọn không hợp lệ.
@@ -375,10 +385,15 @@ function Invoke-Activation ($Log, $Text) {
 }
 
 # Change the edition with the SKU file method (red editions: not listed by DISM).
-# ---- WRITE YOUR OWN LOGIC HERE ----
+# Steps (same flow as the SKU method of other tools, without any KMS step):
+#   1. download <Edition>.zip with that edition's license files (.xrm-ms)
+#   2. copy only the .xrm-ms files to System32\spp\tokens\skus\<Edition>
+#   3. slmgr /rilc  reload the license files
+#   4. slmgr /upk, /ckms, /cpky  remove the old key, KMS host name and registry key (silent, errors ignored)
+#   5. slmgr /ipk   install the key of the target edition (Windows switches edition on restart)
 # Parameters:
 #   $Edition   target EditionID, for example 'Core' or 'Professional'
-#   $Key       product key typed by the user, or '' when the box was left empty
+#   $Key       key of the target edition (the caller falls back to the generic key when empty)
 #   $SystemDir System32 (or Sysnative from a 32-bit PowerShell)
 #   $Log       call  & $Log "text"  to write a line to the log
 #   $Text      the UI text table ($Lang)
@@ -386,8 +401,97 @@ function Invoke-Activation ($Log, $Text) {
 # when it failed, or $null when nothing was done.
 # This function also runs in the background runspace, so it must not touch the UI.
 function Invoke-SkuConversion ($Edition, $Key, $SystemDir, $Log, $Text) {
-    & $Log $Text.SkuNotWritten
-    $null
+    # One zip per EditionID. Third-party source: only .xrm-ms files from it are copied into Windows.
+    $baseUrl = 'https://raw.githubusercontent.com/M1ke193/covert-ms/main/MS_SKU/Win11'
+
+    if (-not $Key) {
+        & $Log $Text.SkuNoKey
+        return $null
+    }
+
+    $workDir = [IO.Path]::Combine([IO.Path]::GetTempPath(), "convertMS_sku_$Edition")
+    try {
+        if (Test-Path -LiteralPath $workDir) { Remove-Item -LiteralPath $workDir -Recurse -Force }
+        $null = New-Item -ItemType Directory -Path $workDir -Force
+        $zipPath = [IO.Path]::Combine($workDir, "$Edition.zip")
+
+        # 1. Download (Windows PowerShell 5.1 needs TLS 1.2 turned on for GitHub)
+        & $Log ($Text.SkuDownload -f $Edition)
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $wc = New-Object System.Net.WebClient
+            try { $wc.DownloadFile("$baseUrl/$Edition.zip", $zipPath) } finally { $wc.Dispose() }
+        } catch {
+            $err = $_.Exception
+            while ($err.InnerException) { $err = $err.InnerException }
+            & $Log ($Text.SkuDownloadFail -f $err.Message)
+            return $null
+        }
+
+        # 2. Read the zip with .NET: Expand-Archive is a script module and cannot load under the
+        #    default Restricted execution policy (irm | iex in an elevated window).
+        #    Only .xrm-ms entries are taken, by file name, whatever the folder layout inside the zip.
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($zipPath)
+        try {
+            $entries = @($zip.Entries | Where-Object { $_.Name -like '*.xrm-ms' })
+            if (-not $entries.Count) {
+                & $Log $Text.SkuNoFiles
+                return $null
+            }
+
+            # 3. Write them to spp\tokens\skus\<Edition>
+            $dest = [IO.Path]::Combine($SystemDir, 'spp\tokens\skus', $Edition)
+            & $Log ($Text.SkuCopy -f $entries.Count, $Edition)
+            $null = New-Item -ItemType Directory -Path $dest -Force
+            foreach ($e in $entries) {
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($e, [IO.Path]::Combine($dest, $e.Name), $true)
+            }
+        }
+        finally {
+            $zip.Dispose()
+        }
+
+        # 4. Reload the license files; stop here if that fails
+        & $Log $Text.SkuRilc
+        $r = Invoke-Slmgr '/rilc' $SystemDir $Log $Text
+        if (-not $r) { return $null }
+        if ($r.ExitCode -ne 0) { return $r.ExitCode }
+
+        # 5. Remove the old key, like "slmgr ... >nul 2>&1": no output, exit codes ignored
+        & $Log $Text.SkuClean
+        $quiet = { param($m) }
+        foreach ($cmd in '/upk', '/ckms', '/cpky') { $null = Invoke-Slmgr $cmd $SystemDir $quiet $Text }
+
+        # 6. Install the key of the target edition (masked in the log)
+        & $Log $Text.SkuIpk
+        $r = Invoke-Slmgr "/ipk $Key" $SystemDir $Log $Text $Key
+        if (-not $r) { return $null }
+        $r.ExitCode
+    }
+    finally {
+        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Run slmgr.vbs through cscript (hidden) and stream its output to $Log, like Invoke-Tool.
+# Examples:  $r = Invoke-Slmgr '/dli' $SystemDir $Log $Text
+#            $r = Invoke-Slmgr "/ipk $Key" $SystemDir $Log $Text $Key   (the key is masked in the log)
+# Returns the Invoke-Tool result (ExitCode, Lines), or $null when cscript.exe / slmgr.vbs is missing
+# (VBScript is an optional feature that newer Windows builds can remove).
+# This function also runs in the background runspace, so it must not touch the UI.
+function Invoke-Slmgr ($ArgList, $SystemDir, $Log, $Text, $Secret) {
+    $cscript = [IO.Path]::Combine($SystemDir, 'cscript.exe')
+    $slmgr   = [IO.Path]::Combine($SystemDir, 'slmgr.vbs')
+    foreach ($file in $cscript, $slmgr) {
+        if (-not [IO.File]::Exists($file)) {
+            & $Log ($Text.SlmgrMissing -f [IO.Path]::GetFileName($file))
+            return $null
+        }
+    }
+    $result = Invoke-Tool $cscript "//nologo `"$slmgr`" $ArgList" $Log $Secret
+    if ($result.ExitCode -ne 0) { & $Log ($Text.SlmgrFailed -f [int]$result.ExitCode) }
+    $result
 }
 
 # Read-only activation check through the built-in licensing WMI class
@@ -503,8 +607,12 @@ function Start-ConsoleMode {
         } else {
             $option.Item2
         }
-        # The SKU method may run without a key; changepk always needs one
-        if (($key -or -not $useSku) -and $key -notmatch $keyPattern) {
+        # Empty key with the SKU method: use the edition's generic key (it still needs one for /ipk)
+        if ($useSku -and -not $key) {
+            $fallback = @($options | Where-Object { $_.Item1 -ne 'User' })
+            if ($fallback.Count) { $key = $fallback[0].Item2 }
+        }
+        if ($key -notmatch $keyPattern) {
             Write-Warning $Lang.KeyFormat
             continue
         }
@@ -968,7 +1076,7 @@ $sync = [hashtable]::Synchronized(@{
 })
 
 $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault2()
-foreach ($fn in 'Invoke-Tool', 'Get-TargetEditions', 'Invoke-EditionChange', 'Invoke-Activation', 'Invoke-SkuConversion', 'Get-ActivationStatus') {
+foreach ($fn in 'Invoke-Tool', 'Get-TargetEditions', 'Invoke-EditionChange', 'Invoke-Activation', 'Invoke-SkuConversion', 'Get-ActivationStatus', 'Invoke-Slmgr') {
     $iss.Commands.Add([System.Management.Automation.Runspaces.SessionStateFunctionEntry]::new($fn, (Get-Item "function:$fn").ScriptBlock.ToString()))
 }
 $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($iss)
@@ -1220,12 +1328,16 @@ $ui.btnConvert.Add_Click({
     $key     = if ($userKey) { $ui.txtKey.Text.Trim().ToUpper() } else { $option.Item2 }
     # Red editions always use the SKU method; green ones only when "Force SKU" is ticked
     $useSku  = $info.Sku -or ($ui.chkForceSku.IsChecked -eq $true)
-    # The SKU method may run without a key; changepk always needs one
-    if ($userKey -and -not $key -and -not $useSku) {
+    # Empty key with the SKU method: use the edition's generic key (it still needs one for /ipk)
+    if ($useSku -and -not $key) {
+        $fallback = @(Get-KeyOptions $info.Edition | Where-Object { $_.Item1 -ne 'User' })
+        if ($fallback.Count) { $key = $fallback[0].Item2 }
+    }
+    if (-not $key) {
         Write-Log "[!] $($Lang.KeyNeeded)"
         return
     }
-    if ($key -and $key -notmatch $keyPattern) {
+    if ($key -notmatch $keyPattern) {
         Write-Log "[!] $($Lang.KeyFormat)"
         return
     }
