@@ -108,11 +108,13 @@ HintForceSku      = Chuyển sang {0} bằng chép file SKU
 ConfirmTitle      = Xác nhận
 ConfirmBody       = Chuyển sang {0} bằng key chung?\n\nWindows sẽ cần khởi động lại và có thể tự khởi động lại.\nKey chung KHÔNG kích hoạt Windows, sau đó hãy nhập key bản quyền của bạn để tự kích hoạt.
 ConfirmBodyKey    = Chuyển sang {0} bằng key bạn nhập, rồi kích hoạt Windows?\n\nWindows sẽ cần khởi động lại và có thể tự khởi động lại.
-ConfirmSkuBody    = Chuyển sang {0}?\n\nViệc chuyển này có thể không thực hiện được và có thể khiến Windows không kích hoạt hoặc không cập nhật được.\nCông cụ này KHÔNG kích hoạt Windows.
+ConfirmSkuBody    = Chuyển sang {0}?\n\nViệc chuyển bằng sao chép SKU có thể gây ra vấn đề cho update windows trong tương lai, hãy chắc chắn lựa chọn của bạn.
 
 LogBanner         = Công cụ chuyển đổi phiên bản Windows 11 - chỉ kích hoạt khi bạn nhập key bản quyền.
 LogReading        = [+] Đang đọc danh sách phiên bản mà microsfot có thể hỗ trợ chuyển đổi chính thống...
-LogListFailed     = [!] Không đọc được danh sách phiên bản từ DISM.
+LogListFailed     = [!] Không đọc được danh sách phiên bản từ DISM, sẽ hiển thị toàn bộ phiên bản. Mặc định sẽ chuyển bằng "changepk", tick ô "Chuyển bằng chép file SKU" nếu muốn chép SKU.
+GroupAll          = [!] Toàn bộ phiên bản (Do DISM không xác định được)
+HintNoDism        = Chuyển sang {0} bằng changepk, DISM không xác nhận được phiên bản hiện tại nên changepk có thể bị từ chối, khi đó hãy tick ô Chuyển bằng chép file SKU.
 LogLegend         = [i] Màu xanh lá: nâng cấp phiên bản bằng changepk (Được support). Màu đỏ: Script tự Download và chép file SKU.
 LogPick           = [i] Chọn phiên bản, điền ActiveKey nếu có, rồi bấm Chuyển đổi.
 LogOpening        = [+] Đang mở Settings > System > Activation...
@@ -307,6 +309,14 @@ function Get-SkuEditions ($Targets) {
             Name     = Get-EditionName $e
             Official = Get-SkuReason $currentEdition $e
         }
+    }
+}
+
+# DISM failed: every edition of the catalog (the current one too, since DISM could not confirm it).
+# Shown red; changepk by default, the SKU file method when the "Force SKU" box is ticked.
+function Get-AllEditions {
+    foreach ($e in $catalog) {
+        [pscustomobject]@{ Edition = $e; Name = Get-EditionName $e; Sku = $false; Official = $null; NoDism = $true }
     }
 }
 
@@ -530,22 +540,30 @@ function Start-ConsoleMode {
     $log = { param($m) Write-Host $m -ForegroundColor DarkGray }
     Write-Host $Lang.ConTitle -ForegroundColor Cyan
     Write-Host ($Lang.ConCurrent -f $osName, $currentEdition, $build)
+    $dismFailed = $false
     try {
         $targets = @(Get-TargetEditions $systemDir $log $Lang)
     } catch {
+        # No DISM list: show every edition; the method is asked per edition (changepk or SKU)
         Write-Warning $_.Exception.Message
-        return
+        Write-Host $Lang.LogListFailed -ForegroundColor Red
+        $targets    = @()
+        $dismFailed = $true
     }
 
-    $skuEditions = @(Get-SkuEditions $targets)
-    # One numbered list: green editions (changepk) first, then red ones (SKU file method)
+    $skuEditions = if ($dismFailed) { @() } else { @(Get-SkuEditions $targets) }
+    # One numbered list: green editions (changepk) first, then red ones (SKU file method).
+    # DISM failed: every edition, red, and the "Force SKU" question decides the method.
     $choices = @(foreach ($t in $targets) { [pscustomobject]@{ Edition = $t; Name = (Get-EditionName $t); Sku = $false } }) +
-               @(foreach ($s in $skuEditions) { [pscustomobject]@{ Edition = $s.Edition; Name = $s.Name; Sku = $true; Official = $s.Official } })
+               @(foreach ($s in $skuEditions) { [pscustomobject]@{ Edition = $s.Edition; Name = $s.Name; Sku = $true; Official = $s.Official } }) +
+               @(if ($dismFailed) { Get-AllEditions })
 
     while ($true) {
         Write-Host ""
         if ($targets) {
             Write-Host "$($Lang.GroupUpgrade):" -ForegroundColor Green
+        } elseif ($dismFailed) {
+            Write-Host "$($Lang.GroupAll):" -ForegroundColor Red
         } else {
             Write-Warning $Lang.NoneAvailable
         }
@@ -555,6 +573,8 @@ function Start-ConsoleMode {
             if ($c.Sku) {
                 # All SKU-method editions share one heading
                 if (-not $skuHeader) { Write-Host "$($Lang.GroupSku):" -ForegroundColor Red; $skuHeader = $true }
+                Write-Host ("  [{0}] {1}" -f ($i + 1), $c.Name) -ForegroundColor Red
+            } elseif ($c.NoDism) {
                 Write-Host ("  [{0}] {1}" -f ($i + 1), $c.Name) -ForegroundColor Red
             } else {
                 Write-Host ("  [{0}] {1}" -f ($i + 1), $c.Name) -ForegroundColor Green
@@ -1113,8 +1133,12 @@ $listWork = {
     param($sync, $systemDir, $text, $quiet)
     # Quiet (refresh after a change): DISM output is not written to the log; errors still are
     $log = if ($quiet) { { param($m) } } else { { param($m) $sync.Queue.Enqueue($m) } }
-    try { $sync.Result = [pscustomobject]@{ Targets = @(Get-TargetEditions $systemDir $log $text) } }
-    catch { $sync.Queue.Enqueue("[!] $($_.Exception.Message)") }
+    try { $sync.Result = [pscustomobject]@{ Targets = @(Get-TargetEditions $systemDir $log $text); Failed = $false } }
+    catch {
+        $sync.Queue.Enqueue("[!] $($_.Exception.Message)")
+        # No DISM list: the window still shows every edition (SKU file method)
+        $sync.Result = [pscustomobject]@{ Targets = @(); Failed = $true }
+    }
     finally { $sync.Done = $true }
 }
 
@@ -1158,6 +1182,10 @@ $onListed = {
         Set-Busy $false $Lang.StatusFailed
         return
     }
+    if ($result.Failed) {
+        Write-Log ""
+        Write-Log $Lang.LogListFailed
+    }
     if (-not $quiet) { Write-Log "" }
 
     # Editions Windows offers: green
@@ -1172,8 +1200,19 @@ $onListed = {
         [void]$ui.cmbTarget.Items.Add($item)
     }
 
+    # DISM failed: every edition, shown red; changepk or the SKU file method follows the tick box
+    $allEditions = if ($result.Failed) { @(Get-AllEditions) } else { @() }
+    foreach ($a in $allEditions) {
+        $item = [System.Windows.Controls.ComboBoxItem]::new()
+        $item.Content    = $a.Name
+        $item.Foreground = $brushSku
+        $item.ToolTip    = $Lang.HintNoDism -f $a.Name
+        $item.Tag        = $a
+        [void]$ui.cmbTarget.Items.Add($item)
+    }
+
     # Editions DISM does not list: red, converted with the SKU file method
-    $skuEditions = @(Get-SkuEditions $targets)
+    $skuEditions = if ($result.Failed) { @() } else { @(Get-SkuEditions $targets) }
     foreach ($s in $skuEditions) {
         $item = [System.Windows.Controls.ComboBoxItem]::new()
         $item.Content    = $s.Name
@@ -1187,6 +1226,9 @@ $onListed = {
         if ($targets) {
             Write-Log "[+] $($Lang.GroupUpgrade):"
             foreach ($target in $targets) { Write-Log "    - $(Get-EditionName $target)" }
+        } elseif ($result.Failed) {
+            Write-Log "$($Lang.GroupAll):" -ForegroundColor Red
+            foreach ($a in $allEditions) { Write-Log "    - $($a.Name)" }
         } else {
             Write-Log "[!] $($Lang.NoneAvailable)"
         }
@@ -1299,12 +1341,13 @@ function Update-Hint {
     $info = Get-SelectedInfo
     if (-not $info) { return }
     $ui.hintBox.Visibility = 'Visible'
-    $red = $info.Sku -or ($ui.chkForceSku.IsChecked -eq $true)
+    $red = $info.Sku -or $info.NoDism -or ($ui.chkForceSku.IsChecked -eq $true)
     $ui.hintBox.BorderBrush = if ($red) { $brushSkuLine } else { $brushOkLine }
     $ui.hintBox.Background  = if ($red) { $brushSkuBg } else { $brushOkBg }
     $ui.txtHint.Foreground  = if ($red) { $brushSku } else { $brushOk }
     $ui.txtHint.Text        = if ($info.Sku) { $info.Official }
-                              elseif ($red) { $Lang.HintForceSku -f $info.Name }
+                              elseif ($ui.chkForceSku.IsChecked -eq $true) { $Lang.HintForceSku -f $info.Name }
+                              elseif ($info.NoDism) { $Lang.HintNoDism -f $info.Name }
                               else { $Lang.HintOk -f $info.Name }
 }
 
